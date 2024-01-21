@@ -81,7 +81,7 @@ export class DataGovLvProvider implements EntityProvider {
           .catch(reason => {
             console.error(`Resource id failed: ${resource.id}`, reason);
             console.log(reason);
-            return { type: "unknown", definition: "unknown" };
+            return { type: "error", definition: JSON.stringify(reason) };
           });
         if (schemaInfo === undefined) {
           schemaInfo = { type: "unknown", definition: "unknown" };
