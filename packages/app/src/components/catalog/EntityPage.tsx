@@ -99,11 +99,11 @@ const overviewContent = (
       <EntityCatalogGraphCard variant="gridItem" height={400} />
     </Grid>
 
+    <Grid item md={8} xs={12}>
+      <EntityProvidedApisCard />
+    </Grid>
     <Grid item md={4} xs={12}>
       <EntityLinksCard />
-    </Grid>
-    <Grid item md={8} xs={12}>
-      <EntityHasSubcomponentsCard variant="gridItem" />
     </Grid>
   </Grid>
 );
@@ -112,17 +112,6 @@ const datasetEntityPage = (
   <EntityLayout>
     <EntityLayout.Route path="/" title="Overview">
       {overviewContent}
-    </EntityLayout.Route>
-
-    <EntityLayout.Route path="/api" title="API">
-      <Grid container spacing={3} alignItems="stretch">
-        <Grid item md={6}>
-          <EntityProvidedApisCard />
-        </Grid>
-        <Grid item md={6}>
-          <EntityConsumedApisCard />
-        </Grid>
-      </Grid>
     </EntityLayout.Route>
   </EntityLayout>
 );
