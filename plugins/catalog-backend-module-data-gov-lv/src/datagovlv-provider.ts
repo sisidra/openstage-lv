@@ -1,5 +1,5 @@
 import {
-  Entity, SystemEntity, ApiEntity, ComponentEntity, GroupEntity,
+  Entity, ApiEntity, ComponentEntity, GroupEntity,
   ANNOTATION_ORIGIN_LOCATION, ANNOTATION_LOCATION, ANNOTATION_VIEW_URL,
 } from '@backstage/catalog-model';
 import {
@@ -37,7 +37,7 @@ export class DataGovLvProvider implements EntityProvider {
     }
 
     const datasetNames = await this.getDatasetNames();
-    const entities = await this.datasetEntities(datasetNames);
+    const entities = await this.applyDatasetEntities(datasetNames);
 
     console.log(`Entities:\t${entities.length}\n`);
 
@@ -50,25 +50,44 @@ export class DataGovLvProvider implements EntityProvider {
     });
   }
 
-  async datasetEntities(datasetNames: string[]): Promise<Entity[]> {
+  async applyDatasetEntities(datasetNames: string[]): Promise<Entity[]> {
     const datasets = await Promise.all(datasetNames.map(name => this.fetchDataset(name)));
-    const datasetsPromises: Promise<Entity[]>[] = datasets.map(async (dataset, index) => {
-      const system: SystemEntity = this.createSystem(dataset);
-      const group: GroupEntity = this.createOwner(dataset);
-      const components: ComponentEntity[] = this.createComponents(dataset);
-      const apis: ApiEntity[] = await this.createApis(dataset);
-      if (index % 20 === 0) {
-        console.log(`Progress: ${index} of ${datasets.length} (${Math.round(index / datasets.length * 100)}%)`);
-      }
-      return [
-        system,
-        group,
-        ...components,
-        ...apis,
-      ]
-    }).map(promise => promise.then(value => {
-      return value;
-    }));
+    const datasetsPromises: Promise<Entity[]>[] = datasets
+      .filter(dataset => {
+        if (dataset.result.type !== "dataset") {
+          console.warn(`Ignore ${dataset.result.type}} - could be a system?`);
+          return false;
+        } else {
+          return true;
+        }
+      })
+      .map(async (dataset, index) => {
+        const group: GroupEntity = this.createOwner(dataset);
+        const component: ComponentEntity = this.createComponent(dataset);
+        const apis: ApiEntity[] = await this.createApis(dataset);
+        if (index % 20 === 0) {
+          console.log(`Progress: ${index} of ${datasets.length} (${Math.round(index / datasets.length * 100)}%)`);
+        }
+        return [
+          group,
+          component,
+          ...apis,
+        ]
+      })
+      .map(promise => promise.then(value => {
+        return value;
+      }))
+      .map(async (datasetEntities) => {
+        await this.connection!.applyMutation({
+          type: 'delta',
+          added: [...await datasetEntities].map(entity => ({
+            entity,
+            locationKey: `${this.getProviderName()}:${this.env}`,
+          })),
+          removed: [],
+        });
+        return datasetEntities;
+      });
     const entitiesPromises: Entity[][] = await Promise.all(datasetsPromises);
     return entitiesPromises.flat();
   }
@@ -96,6 +115,10 @@ export class DataGovLvProvider implements EntityProvider {
             url: resource.url,
             format: resource.format,
             annotations: this.annotations(dataset.result.name),
+            links: [{
+              url: resource.url,
+              title: "Link to the data file",
+            }],
           },
           spec: {
             type: schemaInfo.type,
@@ -124,11 +147,15 @@ export class DataGovLvProvider implements EntityProvider {
       })
     );
     if (response.status !== 200) {
+      const responseText = await response.text();
       if (response.status !== 404) {
         console.error(`Resource id: ${resourceId} returned ${response.status} - ${response.statusText}`);
-        console.error(`${await response.text()}`);
+        console.error(`${responseText}`);
       }
-      return undefined;
+      return {
+        type: "error",
+        definition: responseText,
+      };
     }
     const responseData = await response.json();
     if (responseData.success === false) {
@@ -143,7 +170,10 @@ export class DataGovLvProvider implements EntityProvider {
       "fields": Object.entries(schema).map(([key, value]) => {
         return {
           name: key,
-          type: DataGovLvProvider.TYPE_MAPPING.get(value as string)?.avro ?? (function () { console.error(`TIPS: ${value} no ${resourceId}`); return "string"; })()
+          type: DataGovLvProvider.TYPE_MAPPING.get(value as string)?.avro ?? (function () {
+            console.error(`TYPE: ${value} from ${resourceId}`);
+            return "string";
+          })()
         };
       })
     }
@@ -153,41 +183,39 @@ export class DataGovLvProvider implements EntityProvider {
     };
   }
 
-  createComponents(dataset: any): ComponentEntity[] {
+  createComponent(dataset: any): ComponentEntity {
     const data = dataset.result;
-    return data.resources
-      .map(resource => {
-        return {
-          apiVersion: 'backstage.io/v1beta1',
-          kind: 'Component',
-          metadata: {
-            name: resource.id,
-            title: resource.name === "" ? resource.url : resource.name,
-            description: resource.description,
-            labels: {
-              format: resource.format,
-              frequency: data.frequency,
-              url: resource.url,
-              license_title: data.license_title,
-              license_id: data.license_id,
-              license_url: data.license_url,
-              maintainer: data.maintainer,
-            },
-            tags: [...new Set<string>(data.tags.map((tag: { name: string; }) => tag.name.toLowerCase()))],
-            annotations: {
-              ...this.annotations(dataset.result.name),
-              [ANNOTATION_VIEW_URL]: `url:https://data.gov.lv/dati/lv/dataset/${dataset.result.name}/resource/${resource.id}`,
-            },
-          },
-          spec: {
-            type: data.type,
-            lifecycle: resource.state === "active" ? "production" : "experimental",
-            owner: dataset.result.organization.name,
-            system: data.name,
-            providesApis: [resource.id]
-          },
-        } as ComponentEntity
-      });
+    return {
+      apiVersion: 'backstage.io/v1beta1',
+      kind: 'Component',
+      metadata: {
+        name: data.name,
+        title: data.title,
+        description: data.notes,
+        labels: {
+          license_title: data.license_title,
+          license_id: data.license_id,
+          license_url: data.license_url,
+          maintainer: data.maintainer,
+          frequency: data.frequency,
+        },
+        tags: [...new Set<string>(data.tags.map((tag: { name: string; }) => tag.name.toLowerCase()))],
+        annotations: {
+          ...this.annotations(data.name),
+          [ANNOTATION_VIEW_URL]: `url:https://data.gov.lv/dati/lv/dataset/${data.name}`,
+        },
+        links: [{
+          url: `https://data.gov.lv/dati/lv/dataset/${data.name}`,
+          title: "Link to data.gov.lv",
+        }],
+      },
+      spec: {
+        type: data.type,
+        owner: data.organization.name,
+        lifecycle: data.state === "active" ? "production" : "experimental",
+        providesApis: data.resources.map(resource => resource.id),
+      },
+    };
   }
 
   createOwner(dataset: any): GroupEntity {
@@ -210,33 +238,6 @@ export class DataGovLvProvider implements EntityProvider {
         children: [],
       },
     }
-  }
-
-  createSystem(dataset: any): SystemEntity {
-    const data = dataset.result;
-    return {
-      apiVersion: 'backstage.io/v1beta1',
-      kind: 'System',
-      metadata: {
-        name: data.name,
-        title: data.title,
-        description: data.notes,
-        labels: {
-          license_title: data.license_title,
-          license_id: data.license_id,
-          license_url: data.license_url,
-          maintainer: data.maintainer,
-        },
-        tags: [...new Set<string>(data.tags.map((tag: { name: string; }) => tag.name.toLowerCase()))],
-        annotations: {
-          ...this.annotations(data.name),
-          [ANNOTATION_VIEW_URL]: `url:https://data.gov.lv/dati/lv/dataset/${data.name}`,
-        },
-      },
-      spec: {
-        owner: dataset.result.organization.name,
-      },
-    };
   }
 
   async fetchDataset(name: string): Promise<any> {
