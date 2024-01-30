@@ -11,10 +11,38 @@ import { parse } from 'csv-parse/sync';
 import jsonSchemaGenerator from 'json-schema-generator';
 
 type SchemaInfo = {
-  type: string,
-  definition: string,
-  hasBom?: boolean,
-  charset?: string,
+  type: string;
+  definition: string;
+  hasBom?: boolean;
+  charset?: string;
+};
+
+type DatasetResource = {
+  id: string;
+  url: string;
+  name: string | undefined;
+  description: string | number;
+  format: any;
+  state: string;
+};
+
+
+type Dataset = {
+  result: {
+    name: string;
+    organization: any;
+    title?: string;
+    notes?: string;
+    license_title: string;
+    license_id: string;
+    license_url: string;
+    maintainer: string;
+    frequency: string;
+    tags: any;
+    type: string;
+    state: string;
+    resources: DatasetResource[];
+  }
 };
 
 export class DataGovLvProvider implements EntityProvider {
@@ -100,10 +128,10 @@ export class DataGovLvProvider implements EntityProvider {
     return entitiesPromises.flat();
   }
 
-  async createApis(dataset: any): Promise<ApiEntity[]> {
+  async createApis(dataset: Dataset): Promise<ApiEntity[]> {
     const data = dataset.result;
     const result = data.resources
-      .map(async resource => {
+      .map(async (resource: DatasetResource) => {
         const schemaInfo: SchemaInfo = await this.tryDatastoreInfo(resource.id)
           .then(async datastoreSchema => {
             if (datastoreSchema !== undefined) {
@@ -348,7 +376,7 @@ export class DataGovLvProvider implements EntityProvider {
     };
   }
 
-  createComponent(dataset: any): ComponentEntity {
+  createComponent(dataset: Dataset): ComponentEntity {
     const data = dataset.result;
     return {
       apiVersion: 'backstage.io/v1beta1',
