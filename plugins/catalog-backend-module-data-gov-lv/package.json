@@ -25,7 +25,9 @@
   },
   "dependencies": {
     "@backstage/backend-common": "^0.20.0",
-    "@backstage/backend-plugin-api": "^0.6.8"
+    "@backstage/backend-plugin-api": "^0.6.8",
+    "csv-parse": "^5.5.3",
+    "json-schema-generator": "^2.0.6"
   },
   "devDependencies": {
     "@backstage/backend-test-utils": "^0.2.9",

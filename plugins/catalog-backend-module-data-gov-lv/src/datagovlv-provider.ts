@@ -7,7 +7,15 @@ import {
   EntityProviderConnection,
 } from '@backstage/plugin-catalog-node';
 import PQueue from 'p-queue';
+import { parse } from 'csv-parse/sync';
+import jsonSchemaGenerator from 'json-schema-generator';
 
+type SchemaInfo = {
+  type: string,
+  definition: string,
+  hasBom?: boolean,
+  charset?: string,
+};
 
 export class DataGovLvProvider implements EntityProvider {
   private static readonly API_LIST = "https://data.gov.lv/dati/lv/api/3/action/package_list";
@@ -55,7 +63,7 @@ export class DataGovLvProvider implements EntityProvider {
     const datasetsPromises: Promise<Entity[]>[] = datasets
       .filter(dataset => {
         if (dataset.result.type !== "dataset") {
-          console.warn(`Ignore ${dataset.result.type}} - could be a system?`);
+          console.warn(`Ignore type ${dataset.result.type} - could be a system? TODO: figure out how to find relationships to datasets.`);
           return false;
         } else {
           return true;
@@ -96,40 +104,200 @@ export class DataGovLvProvider implements EntityProvider {
     const data = dataset.result;
     const result = data.resources
       .map(async resource => {
-        let schemaInfo = await this.tryDatastoreInfo(resource.id)
+        const schemaInfo: SchemaInfo = await this.tryDatastoreInfo(resource.id)
+          .then(async datastoreSchema => {
+            if (datastoreSchema !== undefined) {
+              return datastoreSchema;
+            } else {
+              return await this.tryResourceUrl(resource.url);
+            }
+          })
           .catch(reason => {
             console.error(`Resource id failed: ${resource.id}`, reason);
-            console.log(reason);
-            return { type: "error", definition: JSON.stringify(reason) };
+            return { type: "error", definition: JSON.stringify(reason, null, 2) };
+          }).then(schema => {
+            if (schema === undefined) {
+              console.warn(`Not found schema for ${resource.name} - ${resource.id} - ${resource.url}`)
+              return { type: "unknown", definition: "unknown" };
+            } else {
+              return schema;
+            }
           });
-        if (schemaInfo === undefined) {
-          schemaInfo = { type: "unknown", definition: "unknown" };
-        }
+
+        const links = resource.url !== "" ? [{
+          url: resource.url,
+          title: "Link to the data file",
+        }] : [];
+
         return {
           apiVersion: 'backstage.io/v1beta1',
           kind: 'API',
           metadata: {
             name: resource.id,
             title: resource.name === "" ? resource.url : resource.name,
-            description: resource.description,
+            description: resource.description + (schemaInfo.hasBom ? "\n\n> :warning: **Datu fails satur BOM baitus!**" : ""),
             url: resource.url,
             format: resource.format,
             annotations: this.annotations(dataset.result.name),
-            links: [{
-              url: resource.url,
-              title: "Link to the data file",
-            }],
+            links: links,
           },
           spec: {
             type: schemaInfo.type,
             lifecycle: resource.state === "active" ? "production" : "experimental",
             owner: dataset.result.organization.name,
             definition: schemaInfo.definition,
+            startsWithBom: schemaInfo.hasBom,
+            charset: schemaInfo.charset,
             system: data.name,
           },
         } as ApiEntity;
       });
-    return (await Promise.all(result)).flat();
+    return Promise.all(result);
+  }
+
+  async tryResourceUrl(url: string): Promise<SchemaInfo | undefined> {
+    if (url.endsWith(".json")) {
+      return { type: "solved", definition: "enable" };
+      return this.tryResourceJsonUrl(url);
+    } else if (url.endsWith(".csv")) {
+      return { type: "solved", definition: "enable" };
+      return this.tryResourceCsvUrl(url);
+    } else if (url.endsWith(".xml")) {
+      return { type: "xml", definition: "xml" }; // TODO: XSD?
+      // } else if (url.endsWith(".docx")) { // All these following "datasets" :facepalm:
+      //   return { type: "binary", definition: "docx" };
+      // } else if (url.endsWith(".xlsm")) {
+      //   return { type: "binary", definition: "xlsm" };
+      // } else if (url.endsWith(".xlsx")) {
+      //   return { type: "binary", definition: "xlsx" };
+      // } else if (url.endsWith(".xls")) {
+      //   return { type: "binary", definition: "xls" };
+      // } else if (url.endsWith(".pdf")) {
+      //   return { type: "binary", definition: "pdf" };
+      // } else if (url.endsWith(".zip")) {
+      //   return { type: "binary", definition: "zip" };
+      // } else if (url.endsWith(".7z")) {
+      //   return { type: "binary", definition: "7z" };
+      // } else if (url.startsWith("https://public.tableau.com/")) {
+      //   return { type: "tableau", definition: "tableau-dashboard" };
+    } else if (url.endsWith(".geojson")) {
+      return { type: "json-schema", definition: await fetch("https://geojson.org/schema/GeoJSON.json").then(response => response.text()) };
+    }
+    return undefined;
+  }
+
+  async tryResourceCsvUrl(url: string): Promise<SchemaInfo | undefined> {
+    const response = await this.pqueue.add(() => fetch(url));
+    if (response.status !== 200) {
+      const responseText = await response.text();
+      if (response.status !== 404) {
+        console.error(`Resource id: ${url} returned ${response.status} - ${response.statusText}`);
+        console.error(`${responseText}`);
+      }
+      return undefined;
+    }
+
+    const text = await response.text();
+
+    let delimiter: string = ",";
+    let fields: { name: string, type: string }[] = [];
+    let foundOk = false;
+    for (let tryOptions of [
+      { delimiter: ";", relax_quotes: false },
+      { delimiter: ",", relax_quotes: false },
+      { delimiter: "|", relax_quotes: false },
+      { delimiter: "\t", relax_quotes: false },
+      // Stuff like this '=""; ="Nē"; =""; =""; =""; =""'...
+      { delimiter: ";", relax_quotes: true },
+      { delimiter: ",", relax_quotes: true },
+      { delimiter: "|", relax_quotes: true },
+      { delimiter: "\t", relax_quotes: true },
+    ]) {
+      try {
+        const [headers, row]: string[][] = parse(text, {
+          ...tryOptions,
+          to: 2,
+          cast: true,
+          comment: "#",
+          comment_no_infix: true,
+          skip_empty_lines: true,
+        });
+
+        if (headers.length === 1) {
+          delimiter = "unknown";
+          fields = [{ name: headers[0], type: "string" }];
+          continue;
+        }
+
+        delimiter = tryOptions.delimiter;
+        fields = headers.map((header, index) => {
+          return {
+            name: header,
+            type: row === undefined ? "string" :
+              Number.isInteger(row[index]) ? "long"
+                : typeof row[index] === 'number' ? "double"
+                  : "string",
+          };
+        });
+        foundOk = true;
+        break;
+      } catch {
+        // try another delimiter
+      }
+    }
+
+    if (!foundOk) {
+      console.warn(`???? Fields for ${url}: ${JSON.stringify(fields)}`);
+    }
+
+    const avroSchema = {
+      "type": "record",
+      "name": "Row",
+      "csv_delimiter": delimiter,
+      "fields": fields,
+    };
+
+    return {
+      type: "avro",
+      definition: JSON.stringify(avroSchema, null, 2),
+    };
+  }
+
+  async tryResourceJsonUrl(url: string): Promise<SchemaInfo | undefined> {
+    const response = await this.pqueue.add(() => fetch(url));
+    if (response.status !== 200) {
+      const responseText = await response.text();
+      if (response.status !== 404) {
+        console.error(`Resource id: ${url} returned ${response.status} - ${response.statusText}`);
+        console.error(`${responseText}`);
+      }
+      return undefined;
+    }
+    const data = new Uint8Array(await response.arrayBuffer());
+
+    let hasBom = false;
+    let charset = "utf8";
+    let dataString: string;
+    if (data[0] === 255 && data[1] === 254) { // BOM!
+      hasBom = true;
+      charset = "utf-16";
+      dataString = new TextDecoder(charset).decode(data.slice(2));
+    } else if (data[0] === 0xef && data[1] === 0xbb && data[2] === 0xbf) {
+      hasBom = true;
+      charset = "utf-8-sig";
+      dataString = new TextDecoder().decode(data.slice(3));
+    } else {
+      dataString = new TextDecoder().decode(data);
+    }
+
+    const dataObject = JSON.parse(dataString);
+    const definition = jsonSchemaGenerator(dataObject);
+    return {
+      type: "json-schema",
+      definition: JSON.stringify(definition, null, 2),
+      hasBom: hasBom,
+      charset: charset,
+    };
   }
 
   private static readonly TYPE_MAPPING = new Map<string, { avro: string }>([
@@ -138,7 +306,7 @@ export class DataGovLvProvider implements EntityProvider {
     ["date", { avro: "string" }],
   ]);
 
-  async tryDatastoreInfo(resourceId: string): Promise<{ type: string, definition: string } | undefined> {
+  async tryDatastoreInfo(resourceId: string): Promise<SchemaInfo | undefined> {
     const response = await this.pqueue.add(
       () => fetch(DataGovLvProvider.API_INFO, {
         method: "POST",
@@ -152,10 +320,7 @@ export class DataGovLvProvider implements EntityProvider {
         console.error(`Resource id: ${resourceId} returned ${response.status} - ${response.statusText}`);
         console.error(`${responseText}`);
       }
-      return {
-        type: "error",
-        definition: responseText,
-      };
+      return undefined;
     }
     const responseData = await response.json();
     if (responseData.success === false) {
@@ -173,7 +338,7 @@ export class DataGovLvProvider implements EntityProvider {
           type: DataGovLvProvider.TYPE_MAPPING.get(value as string)?.avro ?? (function () {
             console.error(`TYPE: ${value} from ${resourceId}`);
             return "string";
-          })()
+          })(),
         };
       })
     }

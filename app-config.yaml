@@ -34,6 +34,7 @@ backend:
   reading:
     allow:
       - host: data.gov.lv
+      - host: geojson.org
 
 integrations:
   github:
