@@ -97,6 +97,8 @@ export class ApiVissGovLvProvider implements EntityProvider {
   private static readonly API_DOCS = "https://api.viss.gov.lv/api/am/devportal/v2/apis/{ID}/documents";
   private static readonly API_WSDL = "https://api.viss.gov.lv";
 
+  private static readonly NAMESPACE = "viss-gov-lv";
+
   private readonly env: string;
   private connection?: EntityProviderConnection;
 
@@ -161,6 +163,7 @@ export class ApiVissGovLvProvider implements EntityProvider {
       kind: 'System',
       metadata: {
         name: api.categories[0],
+        namespace: ApiVissGovLvProvider.NAMESPACE,
         links: [{
           url: `https://api.viss.gov.lv/devportal/apis?offset=0&query=api-category%3A${api.categories[0]}`,
           title: "Backlink to api.viss.gov.lv",
@@ -187,6 +190,7 @@ export class ApiVissGovLvProvider implements EntityProvider {
       kind: 'Group',
       metadata: {
         name: name,
+        namespace: ApiVissGovLvProvider.NAMESPACE,
         annotations: this.annotations(),
       },
       spec: {
@@ -211,6 +215,7 @@ export class ApiVissGovLvProvider implements EntityProvider {
       kind: 'API',
       metadata: {
         name: api.name,
+        namespace: ApiVissGovLvProvider.NAMESPACE,
         description: (api.description ?? "") +
           (api.wsdlUri ? `\n\n!!! WSDL: ${ApiVissGovLvProvider.API_WSDL + api.wsdlUri}` : ""),
           annotations: this.annotations(),
@@ -244,6 +249,7 @@ export class ApiVissGovLvProvider implements EntityProvider {
       kind: 'Component',
       metadata: {
         name: api.name,
+        namespace: ApiVissGovLvProvider.NAMESPACE,
         description: api.description ?? undefined,
         labels: {
         },
