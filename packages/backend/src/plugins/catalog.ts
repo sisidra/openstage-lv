@@ -3,6 +3,7 @@ import { ScaffolderEntitiesProcessor } from '@backstage/plugin-catalog-backend-m
 import { Router } from 'express';
 import { PluginEnvironment } from '../types';
 import { DataGovLvProvider } from '../../../../plugins/catalog-backend-module-data-gov-lv/src/datagovlv-provider';
+import { ApiVissGovLvProvider } from '../../../../plugins/catalog-backend-module-api-viss-gov-lv/src/apivissgovlv-provider';
 
 export default async function createPlugin(
   env: PluginEnvironment,
@@ -20,7 +21,9 @@ export default async function createPlugin(
   builder.addProcessor(new ScaffolderEntitiesProcessor());
 
   const dataGovLv = new DataGovLvProvider('production');
+  const apiVissGovLv = new ApiVissGovLvProvider('production');
   builder.addEntityProvider(dataGovLv);
+  builder.addEntityProvider(apiVissGovLv);
 
   const { processingEngine, router } = await builder.build();
   await processingEngine.start();
@@ -30,8 +33,16 @@ export default async function createPlugin(
     fn: async () => {
       await dataGovLv.run();
     },
-    frequency: { minutes: 60 },
-    timeout: { minutes: 20 },
+    frequency: { minutes: 300 },
+    timeout: { minutes: 200 },
+  });
+  await env.scheduler.scheduleTask({
+    id: 'run_apiVissGovLv_refresh',
+    fn: async () => {
+      await apiVissGovLv.run();
+    },
+    frequency: { minutes: 300 },
+    timeout: { minutes: 200 },
   });
 
   return router;
