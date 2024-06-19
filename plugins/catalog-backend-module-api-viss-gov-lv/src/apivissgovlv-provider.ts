@@ -1,5 +1,5 @@
 import {
-  ApiEntity, ComponentEntity, GroupEntity,
+  ApiEntity, ComponentEntity, GroupEntity, SystemEntity,
   ANNOTATION_ORIGIN_LOCATION, ANNOTATION_LOCATION, ANNOTATION_VIEW_URL,
 } from '@backstage/catalog-model';
 import {
@@ -125,10 +125,12 @@ export class ApiVissGovLvProvider implements EntityProvider {
     const components = this.transformToComponents(apiDefinitions);
     const apiComponents = this.transformToApis(apiDefinitions);
     const groups = this.transformToGroups(apiDefinitions);
+    const systems = this.transformToSystems(apiDefinitions);
 
     console.log(`Components:\t${components.length}`);
     console.log(`APIs:\t${apiComponents.length}`);
     console.log(`Groups:\t${groups.length}`);
+    console.log(`Systems:\t${systems.length}`);
 
     await this.connection.applyMutation({
       type: 'full',
@@ -136,6 +138,7 @@ export class ApiVissGovLvProvider implements EntityProvider {
         ...await Promise.all(components),
         ...await Promise.all(apiComponents),
         ...await Promise.all(groups),
+        ...(await Promise.all(systems)).flat(),
       ].map(entity => ({
         entity,
         locationKey: `${this.getProviderName()}:${this.env}`,
@@ -143,9 +146,40 @@ export class ApiVissGovLvProvider implements EntityProvider {
     });
   }
 
+  transformToSystems(apis: Promise<ApiDefinition>[]): Promise<SystemEntity | []>[] {
+    return apis.map(api => this.transformToSystem(api));
+  }
+
+  async transformToSystem(apiPromise: Promise<ApiDefinition>): Promise<SystemEntity | []> {
+    const api = await apiPromise;
+
+    if (api.categories.length == 0)
+      return [];
+
+    return {
+      apiVersion: 'backstage.io/v1beta1',
+      kind: 'System',
+      metadata: {
+        name: api.categories[0],
+        links: [{
+          url: `https://api.viss.gov.lv/devportal/apis?offset=0&query=api-category%3A${api.categories[0]}`,
+          title: "Backlink to api.viss.gov.lv",
+        }],
+        annotations: {
+          [ANNOTATION_LOCATION]: `url:https://api.viss.gov.lv/api/am/devportal/v2/api-categories`,
+          [ANNOTATION_ORIGIN_LOCATION]: `url:https://api.viss.gov.lv/api/am/devportal/v2/api-categories`,
+        }
+      },
+      spec: {
+        owner: api.businessInformation.businessOwner ?? api.businessInformation.technicalOwner ?? api.provider,
+      },
+    }
+  }
+
   transformToGroups(apis: Promise<ApiDefinition>[]): Promise<GroupEntity>[] {
     return apis.map(api => this.transformToGroup(api));
   }
+
   async transformToGroup(apiPromise: Promise<ApiDefinition>): Promise<GroupEntity> {
     const api = await apiPromise;
 
@@ -197,7 +231,7 @@ export class ApiVissGovLvProvider implements EntityProvider {
         //   ? { $text: ApiVissGovLvProvider.API_WSDL + api.wsdlUri }
         //   : api.apiDefinition,
         definition: api.apiDefinition,
-        // system: data.name,
+        system: api.categories.at(0),
       },
     };
   }
@@ -234,6 +268,7 @@ export class ApiVissGovLvProvider implements EntityProvider {
         owner: api.businessInformation.businessOwner ?? api.businessInformation.technicalOwner ?? api.provider,
         lifecycle: api.lifeCycleStatus === "PUBLISHED" ? "production" : "experimental",
         providesApis: [api.name],
+        system: api.categories.at(0),
       },
     };
   }
