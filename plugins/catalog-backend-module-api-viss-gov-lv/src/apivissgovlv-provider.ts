@@ -165,10 +165,7 @@ export class ApiVissGovLvProvider implements EntityProvider {
           url: `https://api.viss.gov.lv/devportal/apis?offset=0&query=api-category%3A${api.categories[0]}`,
           title: "Backlink to api.viss.gov.lv",
         }],
-        annotations: {
-          [ANNOTATION_LOCATION]: `url:https://api.viss.gov.lv/api/am/devportal/v2/api-categories`,
-          [ANNOTATION_ORIGIN_LOCATION]: `url:https://api.viss.gov.lv/api/am/devportal/v2/api-categories`,
-        }
+        annotations: this.annotations(),
       },
       spec: {
         owner: api.businessInformation.businessOwner ?? api.businessInformation.technicalOwner ?? api.provider,
@@ -190,7 +187,7 @@ export class ApiVissGovLvProvider implements EntityProvider {
       kind: 'Group',
       metadata: {
         name: name,
-        annotations: this.annotations(api.id),
+        annotations: this.annotations(),
       },
       spec: {
         type: "bureaucrat",
@@ -216,8 +213,8 @@ export class ApiVissGovLvProvider implements EntityProvider {
         name: api.name,
         description: (api.description ?? "") +
           (api.wsdlUri ? `\n\n!!! WSDL: ${ApiVissGovLvProvider.API_WSDL + api.wsdlUri}` : ""),
-        annotations: this.annotations(api.id),
-        links: [{
+          annotations: this.annotations(),
+          links: [{
           url: `https://api.viss.gov.lv/devportal/apis/${api.id}/overview`,
           title: "Backlink to api.viss.gov.lv",
         }],
@@ -255,7 +252,7 @@ export class ApiVissGovLvProvider implements EntityProvider {
           version: api.version,
           provider: api.provider,
           avgRating: api.avgRating,
-          ...this.annotations(api.id),
+          ...this.annotations(),
           [ANNOTATION_VIEW_URL]: `url:https://api.viss.gov.lv/devportal/apis/${api.id}/overview`,
         },
         links: [{
@@ -293,11 +290,10 @@ export class ApiVissGovLvProvider implements EntityProvider {
     return data.list as ApiListItem[];
   }
 
-  annotations(id: string) {
-    const url = ApiVissGovLvProvider.API_SHOW.replace("{ID}", id);
+  annotations() {
     return {
-      [ANNOTATION_LOCATION]: `url:${url}`,
-      [ANNOTATION_ORIGIN_LOCATION]: `url:${url}`,
+      [ANNOTATION_LOCATION]: `url:${ApiVissGovLvProvider.API_LIST}`,
+      [ANNOTATION_ORIGIN_LOCATION]: `url:${ApiVissGovLvProvider.API_LIST}`,
     }
   }
 }
